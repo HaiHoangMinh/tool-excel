@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+output/
+whatsapp_profile/
+whatsapp_profile_chrome/
+*.pdf
+_*.txt
+settings_cache.json
+Book1.xlsm
+*.xlsm
+*.xlsx
+.env

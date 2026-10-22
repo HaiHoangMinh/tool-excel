@@ -1,0 +1,60 @@
+{
+  "workbook": "Book1.xlsm",
+  "filter_column": "Đội",
+  "header_row": 2,
+  "skip_teams": ["#N/A", ""],
+  "capture_mode": "doi1",
+  "sheets": [
+    {
+      "name": "XLSC_TON",
+      "suffix": "XLSC",
+      "export_columns": [
+        "Mã Khiếu Nại",
+        "Thuê bao",
+        "Người khiếu nại",
+        "Ngày tiếp nhận",
+        "Thể loại",
+        "Huyện",
+        "MÃ TỦ",
+        "Tính KPI",
+        "Phân loại SC",
+        "TG tồn",
+        "NVKT",
+        "Họ tên",
+        "Đội"
+      ]
+    },
+    {
+      "name": "TKM_TON",
+      "suffix": "TKM",
+      "export_columns": [
+        "Loại yêu cầu",
+        "Dịch vụ",
+        "Tên khách hàng",
+        "Account",
+        "Địa chỉ lắp đặt",
+        "Ngày tiếp nhận yêu cầu",
+        "Ghi chú (Đầu mối liên hệ xác nhận)",
+        "Tích hẹn",
+        "Thời gian tồn ( giờ )",
+        "Hủy",
+        "Huyện",
+        "Nhân viên",
+        "Họ Tên",
+        "Đội"
+      ]
+    }
+  ],
+  "output_dir": "output",
+  "excel_visible": true,
+  "pdf_dpi": 200,
+  "export_target_width": 0,
+  "export_scale": 2.0,
+  "crop_white_margins": true,
+  "crop_white_threshold": 248,
+  "crop_padding": 2,
+  "whatsapp_browser": "chrome",
+  "whatsapp_browser_strict": true,
+  "whatsapp_profile_dir": "whatsapp_profile_chrome",
+  "whatsapp_send_mode": "combined"
+}
