@@ -10,3 +10,6 @@ Book1.xlsm
 *.xlsm
 *.xlsx
 .env
+.playwright-mcp/
+web/test-results/
+web/playwright-report/
