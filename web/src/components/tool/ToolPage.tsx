@@ -13,11 +13,14 @@ export function ToolPage({ app }: { app: AppController }) {
         <div>
           <h1>Tool Excel — Báo cáo theo đội</h1>
           <p className="tool-header__sub">
-            Upload · xuất ảnh · gửi WhatsApp thủ công (một trang)
+            Upload · xuất ảnh · gửi WhatsApp (cần WA Bridge trên Windows)
           </p>
         </div>
         <div className="tool-header__meta">
-          <Badge tone={app.busy ? 'warning' : 'success'}>
+          <Badge tone={app.bridgeOnline ? 'success' : 'warning'}>
+            {app.bridgeOnline ? 'WA Bridge: bật' : 'WA Bridge: tắt'}
+          </Badge>
+          <Badge tone={app.busy ? 'warning' : 'neutral'}>
             {app.busy ? 'Đang xử lý' : 'Sẵn sàng'}
           </Badge>
           <span data-testid="tool-status" className="tool-status">
@@ -36,8 +39,23 @@ export function ToolPage({ app }: { app: AppController }) {
         <Button onClick={() => app.runExport(false)} disabled={app.busy}>
           Xuất ảnh (tải PNG)
         </Button>
-        <Button variant="primary" onClick={() => app.runExport(true)} disabled={app.busy}>
+        <Button onClick={() => app.runExport(true)} disabled={app.busy}>
           Tải ZIP ảnh
+        </Button>
+        <Button
+          onClick={() => app.runJob('send')}
+          disabled={app.busy || !app.bridgeOnline}
+          title={app.bridgeOnline ? '' : 'Chạy Mo Web + WA Bridge.bat'}
+        >
+          Gửi WhatsApp
+        </Button>
+        <Button
+          variant="primary"
+          onClick={() => app.runJob('both')}
+          disabled={app.busy || !app.bridgeOnline}
+          title={app.bridgeOnline ? '' : 'Chạy Mo Web + WA Bridge.bat'}
+        >
+          Xuất ảnh + Gửi WhatsApp
         </Button>
         {lastJob && (
           <span className="muted tool-actions__hint">
@@ -132,9 +150,11 @@ export function ToolPage({ app }: { app: AppController }) {
       </section>
 
       <section className="panel-block">
-        <h3>Gửi WhatsApp thủ công</h3>
+        <h3>WhatsApp</h3>
         <p className="muted tool-wa-intro">
-          Sau khi tải ZIP/PNG: mở WhatsApp Web → tìm nhóm → copy tin → đính kèm ảnh XLSC/TKM.
+          {app.bridgeOnline
+            ? 'Nút Gửi WhatsApp dùng Chrome + Playwright giống tool desktop (lần đầu quét QR).'
+            : 'Chạy file Mo Web + WA Bridge.bat cùng thư mục tool để bật gửi tự động. Tạm thời có thể copy tin bên dưới.'}
         </p>
         {Object.keys(app.waMap).length === 0 ? (
           <p className="muted">Bật &quot;Gửi&quot; và điền tên nhóm cho ít nhất 1 đội.</p>

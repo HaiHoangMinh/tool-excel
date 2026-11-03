@@ -21,6 +21,8 @@ npm run test:e2e
 
 Nếu trình duyệt nhúng (Cursor) chặn chọn file: **kéo thả** file Excel vào vùng dashed, hoặc mở `http://localhost:5173` bằng Chrome/Edge.
 
+**Gửi WhatsApp tự động (giống tool desktop):** trên Windows chạy `Mo Web + WA Bridge.bat` (mở web + `wa_bridge_server.py`). Trên web dùng **Gửi WhatsApp** hoặc **Xuất ảnh + Gửi WhatsApp** — gọi `send_whatsapp.py` qua Chrome/Playwright. Trên Vercel (chỉ static) không gửi tự động được; cần bridge local.
+
 Deploy lên Vercel (root repo, dùng `vercel.json` ở thư mục gốc):
 
 ```bash

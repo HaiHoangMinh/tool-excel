@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_CONFIG } from '../config'
 import {
   buildTeamTable,
@@ -27,6 +27,12 @@ import {
 } from '../lib/storage'
 import { validateWorkbook, type ValidationResult } from '../lib/validate'
 import { useToast } from '../components/ui/Toast'
+import {
+  checkBridge,
+  pushSettingsToBridge,
+  sendWhatsAppViaBridge,
+  uploadExportItems,
+} from '../lib/bridge'
 
 function todayFolder(): string {
   return new Date().toISOString().slice(0, 10)
@@ -44,8 +50,23 @@ export function useAppController() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [lastExports, setLastExports] = useState<ExportItem[]>([])
   const [jobs, setJobs] = useState<JobRecord[]>(() => loadJobHistory())
+  const [bridgeOnline, setBridgeOnline] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      const ok = await checkBridge()
+      if (alive) setBridgeOnline(ok)
+    }
+    tick()
+    const id = window.setInterval(tick, 8000)
+    return () => {
+      alive = false
+      window.clearInterval(id)
+    }
+  }, [])
 
   const teamNames = useMemo(
     () => Object.keys(cache.teams).sort((a, b) => a.localeCompare(b, 'vi')),
@@ -63,14 +84,35 @@ export function useAppController() {
     }))
   }
 
-  const handleSave = () => {
+  const toPythonSettings = useCallback(() => {
+    return {
+      version: 1,
+      last_workbook: workbook?.fileName ?? cache.last_file_name ?? '',
+      updated_at: new Date().toISOString(),
+      teams: cache.teams,
+    }
+  }, [cache, workbook?.fileName])
+
+  const handleSave = async () => {
     const next = {
       ...cache,
       last_file_name: workbook?.fileName ?? cache.last_file_name,
     }
     saveCache(next)
     setCache(next)
-    setStatus('Đã lưu cài đặt (trình duyệt)')
+    try {
+      if (bridgeOnline) {
+        await pushSettingsToBridge({
+          ...toPythonSettings(),
+          last_workbook: next.last_file_name ?? '',
+        })
+        setStatus('Đã lưu cài đặt (trình duyệt + bridge)')
+      } else {
+        setStatus('Đã lưu cài đặt (trình duyệt)')
+      }
+    } catch {
+      setStatus('Đã lưu cài đặt (trình duyệt)')
+    }
     appendLog('Đã lưu cài đặt nhóm WhatsApp.')
     toast.push('Đã lưu cài đặt', 'success')
   }
@@ -171,64 +213,41 @@ export function useAppController() {
   const selectedTeams = teamNames.filter((t) => cache.teams[t]?.send)
   const waMap = teamsForWhatsapp(cache.teams)
 
-  const runExport = async (asZip: boolean) => {
-    if (!workbook) {
-      appendLog('Chọn file Excel trước khi xuất ảnh.')
-      return
-    }
-    if (selectedTeams.length === 0) {
-      appendLog('Tick ít nhất 1 đội cần xuất.')
-      toast.push('Chọn ít nhất 1 đội', 'error')
-      return
-    }
-
-    setBusy(true)
-    setStatus('Đang xuất ảnh...')
-    appendLog(`Bắt đầu xuất (${selectedTeams.length} đội)...`)
-    const started = performance.now()
+  const buildExportItems = async (): Promise<{ items: ExportItem[]; skip: number }> => {
+    if (!workbook) throw new Error('Chọn file Excel trước.')
+    if (selectedTeams.length === 0) throw new Error('Tick ít nhất 1 đội cần xuất.')
     const items: ExportItem[] = []
     let skip = 0
-
-    try {
-      for (const team of selectedTeams) {
-        const safe = sanitizeFilename(team)
-        for (const sh of APP_CONFIG.sheets) {
-          const table = buildTeamTable(workbook.workbook, sh, team)
-          if (!table) {
-            skip++
-            appendLog(`  [SKIP] ${team} / ${sh.name} — không có dòng`)
-            continue
-          }
-          const title = `${team} — ${sh.suffix}`
-          const blob = await tableToPngBlob(table, title)
-          items.push({ team, suffix: sh.suffix, fileName: `${safe}_${sh.suffix}.png`, blob })
-          appendLog(`  [OK] ${team} / ${sh.suffix}`)
+    for (const team of selectedTeams) {
+      const safe = sanitizeFilename(team)
+      for (const sh of APP_CONFIG.sheets) {
+        const table = buildTeamTable(workbook.workbook, sh, team)
+        if (!table) {
+          skip++
+          appendLog(`  [SKIP] ${team} / ${sh.name} — không có dòng`)
+          continue
         }
+        const title = `${team} — ${sh.suffix}`
+        const blob = await tableToPngBlob(table, title)
+        items.push({ team, suffix: sh.suffix, fileName: `${safe}_${sh.suffix}.png`, blob })
+        appendLog(`  [OK] ${team} / ${sh.suffix}`)
       }
+    }
+    return { items, skip }
+  }
 
-      if (items.length === 0) {
-        appendLog('Không có ảnh nào được tạo.')
-        setStatus('Không có dữ liệu xuất')
-        toast.push('Không có ảnh để xuất', 'error')
-        return
-      }
-
-      setLastExports(items)
-      const folder = todayFolder()
-      if (asZip) {
-        await zipExportItems(items, `bao-cao-${folder}.zip`)
-        appendLog(`Đã tải ZIP (${items.length} ảnh).`)
-      } else {
-        for (const item of items) {
-          downloadBlob(item.blob, item.fileName)
-        }
-        appendLog(`Đã tải ${items.length} file PNG.`)
-      }
-
-      const durationMs = Math.round(performance.now() - started)
-      const status: JobRecord['status'] =
-        skip > 0 && items.length > 0 ? 'partial' : skip > 0 && items.length === 0 ? 'failed' : 'completed'
-      const record: JobRecord = {
+  const recordExportJob = (
+    items: ExportItem[],
+    skip: number,
+    started: number,
+    note: string,
+  ) => {
+    if (!workbook) return
+    const durationMs = Math.round(performance.now() - started)
+    const status: JobRecord['status'] =
+      skip > 0 && items.length > 0 ? 'partial' : skip > 0 && items.length === 0 ? 'failed' : 'completed'
+    setJobs(
+      appendJob({
         id: `${Date.now()}`,
         fileName: workbook.fileName,
         startedAt: new Date().toISOString(),
@@ -237,20 +256,111 @@ export function useAppController() {
         imagesOk: items.length,
         imagesSkip: skip,
         status,
-        note: 'Gửi WhatsApp thủ công sau khi tải ảnh',
+        note,
+      }),
+    )
+  }
+
+  const runWhatsAppSend = async (items: ExportItem[], runDay: string) => {
+    const waTeams = Object.keys(waMap)
+    if (waTeams.length === 0) {
+      throw new Error('Bật Gửi và điền tên nhóm WhatsApp cho ít nhất 1 đội.')
+    }
+    if (!bridgeOnline) {
+      throw new Error(
+        'Chưa có WA Bridge. Chạy "Mo Web + WA Bridge.bat" trên Windows (giống tool Python).',
+      )
+    }
+    appendLog('Đồng bộ settings sang bridge...')
+    await pushSettingsToBridge(toPythonSettings())
+    appendLog(`Upload ${items.length} ảnh vào output/${runDay}...`)
+    const n = await uploadExportItems(items, runDay)
+    appendLog(`Đã ghi ${n} ảnh. Bắt đầu gửi WhatsApp (Chrome)...`)
+    setStatus('Đang gửi WhatsApp...')
+    const log = await sendWhatsAppViaBridge(waTeams, runDay)
+    for (const line of log.split('\n')) {
+      if (line.trim()) appendLog(line.trim())
+    }
+  }
+
+  type JobMode = 'export' | 'send' | 'both'
+
+  const runJob = async (mode: JobMode, asZip = false) => {
+    if (mode === 'send' && !bridgeOnline) {
+      toast.push('Cần WA Bridge trên máy Windows', 'error')
+      appendLog('Chạy: Mo Web + WA Bridge.bat (hoặc py wa_bridge_server.py)')
+      return
+    }
+    if (mode !== 'send' && !workbook) {
+      appendLog('Chọn file Excel trước khi xuất ảnh.')
+      return
+    }
+    if (mode === 'send' && lastExports.length === 0) {
+      appendLog('Chưa có ảnh — dùng "Xuất ảnh + Gửi WhatsApp" hoặc xuất trước.')
+      toast.push('Xuất ảnh trước khi gửi', 'error')
+      return
+    }
+
+    setBusy(true)
+    const started = performance.now()
+    const runDay = todayFolder()
+
+    try {
+      let items = lastExports
+      let skip = 0
+
+      if (mode !== 'send') {
+        setStatus('Đang xuất ảnh...')
+        appendLog(`Bắt đầu xuất (${selectedTeams.length} đội)...`)
+        const built = await buildExportItems()
+        items = built.items
+        skip = built.skip
+        if (items.length === 0) {
+          appendLog('Không có ảnh nào được tạo.')
+          setStatus('Không có dữ liệu xuất')
+          toast.push('Không có ảnh để xuất', 'error')
+          return
+        }
+        setLastExports(items)
+        if (mode === 'export') {
+          if (asZip) {
+            await zipExportItems(items, `bao-cao-${runDay}.zip`)
+            appendLog(`Đã tải ZIP (${items.length} ảnh).`)
+          } else {
+            for (const item of items) {
+              downloadBlob(item.blob, item.fileName)
+            }
+            appendLog(`Đã tải ${items.length} file PNG.`)
+          }
+          recordExportJob(items, skip, started, 'Tải file về máy')
+          setStatus('Hoàn tất xuất ảnh')
+          toast.push(asZip ? 'Đã tạo ZIP ảnh' : 'Đã tải PNG', 'success')
+        }
       }
-      setJobs(appendJob(record))
-      setStatus('Hoàn tất xuất ảnh')
-      toast.push(asZip ? 'Đã tạo ZIP ảnh' : 'Đã tải PNG', 'success')
+
+      if (mode === 'send' || mode === 'both') {
+        const sendItems = mode === 'send' ? lastExports : items
+        await runWhatsAppSend(sendItems, runDay)
+        recordExportJob(
+          sendItems,
+          skip,
+          started,
+          mode === 'both' ? 'Xuất + gửi WhatsApp (Playwright)' : 'Gửi WhatsApp (Playwright)',
+        )
+        setStatus('Hoàn tất gửi WhatsApp')
+        toast.push('Hoàn tất gửi WhatsApp', 'success')
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      appendLog(`LỖI xuất: ${msg}`)
+      appendLog(`LỖI: ${msg}`)
       setStatus('Có lỗi — xem nhật ký')
       toast.push(msg, 'error')
     } finally {
       setBusy(false)
     }
   }
+
+  const runExport = async (asZip: boolean) => runJob('export', asZip)
 
   const copyMessage = async (team: string) => {
     const text = messageTextForTeam(cache.teams, team)
@@ -315,6 +425,7 @@ export function useAppController() {
     selectedTeams,
     waMap,
     allSelected,
+    bridgeOnline,
     updateTeam,
     handleSave,
     onFileChange,
@@ -322,6 +433,7 @@ export function useAppController() {
     onSyncClick,
     toggleSelectAll,
     runExport,
+    runJob,
     copyMessage,
     importSettingsJson,
   }
