@@ -22,9 +22,21 @@ from settings_cache import save_cache  # noqa: E402
 
 
 def _cors(handler: BaseHTTPRequestHandler) -> None:
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    """CORS + Private Network Access (HTTPS Vercel → http://127.0.0.1)."""
+    origin = handler.headers.get("Origin")
+    if origin:
+        handler.send_header("Access-Control-Allow-Origin", origin)
+        handler.send_header("Vary", "Origin")
+    else:
+        handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    req_headers = handler.headers.get("Access-Control-Request-Headers")
+    if req_headers:
+        handler.send_header("Access-Control-Allow-Headers", req_headers)
+    else:
+        handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    handler.send_header("Access-Control-Allow-Private-Network", "true")
+    handler.send_header("Access-Control-Max-Age", "86400")
 
 
 def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
@@ -170,6 +182,7 @@ def main() -> None:
             pass
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"WA Bridge: http://127.0.0.1:{PORT}  (Ctrl+C để dừng)")
+    print("Dùng với web Vercel: mở site deploy + chạy bridge trên cùng máy Windows.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

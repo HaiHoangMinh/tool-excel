@@ -27,12 +27,14 @@ import {
 } from '../lib/storage'
 import { validateWorkbook, type ValidationResult } from '../lib/validate'
 import { useToast } from '../components/ui/Toast'
-import {
-  checkBridge,
-  pushSettingsToBridge,
-  sendWhatsAppViaBridge,
-  uploadExportItems,
-} from '../lib/bridge'
+import { detectWaTransport, type WaTransportState } from '../lib/waTransport'
+import { sendWhatsAppViaExtension } from '../lib/waExtension'
+
+function isLikelyVercelHost(): boolean {
+  if (typeof window === 'undefined') return false
+  const h = window.location.hostname
+  return h.endsWith('.vercel.app') || h.includes('vercel.app')
+}
 
 function todayFolder(): string {
   return new Date().toISOString().slice(0, 10)
@@ -50,18 +52,23 @@ export function useAppController() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [lastExports, setLastExports] = useState<ExportItem[]>([])
   const [jobs, setJobs] = useState<JobRecord[]>(() => loadJobHistory())
-  const [bridgeOnline, setBridgeOnline] = useState(false)
+  const [waTransport, setWaTransport] = useState<WaTransportState>({ ready: false })
   const fileRef = useRef<HTMLInputElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
+  const devAutoloadRan = useRef(false)
+
+  const appendLog = useCallback((msg: string) => {
+    setLogs((prev) => [...prev, msg])
+  }, [])
 
   useEffect(() => {
     let alive = true
     const tick = async () => {
-      const ok = await checkBridge()
-      if (alive) setBridgeOnline(ok)
+      const state = await detectWaTransport()
+      if (alive) setWaTransport(state)
     }
     tick()
-    const id = window.setInterval(tick, 8000)
+    const id = window.setInterval(tick, 4000)
     return () => {
       alive = false
       window.clearInterval(id)
@@ -73,25 +80,12 @@ export function useAppController() {
     [cache.teams],
   )
 
-  const appendLog = useCallback((msg: string) => {
-    setLogs((prev) => [...prev, msg])
-  }, [])
-
   const updateTeam = (team: string, patch: Partial<TeamConfig>) => {
     setCache((prev) => ({
       ...prev,
       teams: { ...prev.teams, [team]: { ...prev.teams[team], ...patch } },
     }))
   }
-
-  const toPythonSettings = useCallback(() => {
-    return {
-      version: 1,
-      last_workbook: workbook?.fileName ?? cache.last_file_name ?? '',
-      updated_at: new Date().toISOString(),
-      teams: cache.teams,
-    }
-  }, [cache, workbook?.fileName])
 
   const handleSave = async () => {
     const next = {
@@ -100,19 +94,7 @@ export function useAppController() {
     }
     saveCache(next)
     setCache(next)
-    try {
-      if (bridgeOnline) {
-        await pushSettingsToBridge({
-          ...toPythonSettings(),
-          last_workbook: next.last_file_name ?? '',
-        })
-        setStatus('Đã lưu cài đặt (trình duyệt + bridge)')
-      } else {
-        setStatus('Đã lưu cài đặt (trình duyệt)')
-      }
-    } catch {
-      setStatus('Đã lưu cài đặt (trình duyệt)')
-    }
+    setStatus('Đã lưu cài đặt (trình duyệt)')
     appendLog('Đã lưu cài đặt nhóm WhatsApp.')
     toast.push('Đã lưu cài đặt', 'success')
   }
@@ -189,6 +171,108 @@ export function useAppController() {
     if (file) await loadExcelFile(file)
   }
 
+  const applySettingsTeams = useCallback(
+    (teams: Record<string, TeamConfig>, sourceLabel: string) => {
+      setCache((prev) => {
+        const next = { ...prev, teams: { ...prev.teams, ...teams } }
+        saveCache(next)
+        return next
+      })
+      appendLog(`Đã nhập cài đặt từ ${sourceLabel}`)
+      toast.push('Đã nhập settings', 'success')
+    },
+    [appendLog, toast],
+  )
+
+  const loadDevBook1 = useCallback(async () => {
+    if (!import.meta.env.DEV) return
+    appendLog('Đang tải Book1.xlsm từ dev server (không cần chọn file)...')
+    const res = await fetch('/dev-local/book1.xlsm')
+    if (!res.ok) {
+      throw new Error('Không tải được Book1.xlsm — đặt file ở thư mục gốc repo.')
+    }
+    const blob = await res.blob()
+    const file = new File([blob], 'Book1.xlsm', {
+      type: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    })
+    await loadExcelFile(file)
+  }, [appendLog, loadExcelFile])
+
+  const loadDevSettings = useCallback(async () => {
+    if (!import.meta.env.DEV) return
+    const res = await fetch('/dev-local/settings_cache.json')
+    if (!res.ok) throw new Error('Không tải được settings_cache.json')
+    const data = (await res.json()) as { teams?: Record<string, TeamConfig | string> }
+    if (!data.teams) throw new Error('File không có mục teams')
+    const teams: Record<string, TeamConfig> = {}
+    for (const [name, val] of Object.entries(data.teams)) {
+      if (typeof val === 'string') {
+        teams[name] = {
+          whatsapp_group: val.trim(),
+          whatsapp_to: '',
+          send: Boolean(val.trim()),
+          message_text: name,
+        }
+      } else {
+        teams[name] = {
+          whatsapp_group: (val.whatsapp_group || '').trim(),
+          whatsapp_to: (val.whatsapp_to || '').trim(),
+          send: val.send ?? true,
+          message_text: (val.message_text || name).trim() || name,
+        }
+      }
+    }
+    applySettingsTeams(teams, 'settings_cache.json (dev)')
+  }, [applySettingsTeams])
+
+  const pickExcelViaDialog = useCallback(async () => {
+    const picker = (
+      window as Window & {
+        showOpenFilePicker?: (opts: unknown) => Promise<FileSystemFileHandle[]>
+      }
+    ).showOpenFilePicker
+    if (!picker) {
+      fileRef.current?.click()
+      return
+    }
+    try {
+      const [handle] = await picker({
+        multiple: false,
+        types: [
+          {
+            description: 'Excel',
+            accept: {
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [
+                '.xlsx',
+                '.xlsm',
+              ],
+              'application/vnd.ms-excel': ['.xls'],
+              'text/csv': ['.csv'],
+            },
+          },
+        ],
+      })
+      const file = await handle.getFile()
+      await loadExcelFile(file)
+    } catch {
+      /* user cancelled */
+    }
+  }, [loadExcelFile])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || devAutoloadRan.current) return
+    devAutoloadRan.current = true
+    const params = new URLSearchParams(window.location.search)
+    void (async () => {
+      try {
+        if (params.get('autoload') === 'book1') await loadDevBook1()
+        if (params.get('autosettings') === '1') await loadDevSettings()
+      } catch (err) {
+        appendLog(`Dev autoload: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
+  }, [appendLog, loadDevBook1, loadDevSettings])
+
   const onSyncClick = () => {
     if (!workbook) {
       appendLog('Chọn file Excel trước khi đồng bộ.')
@@ -261,34 +345,39 @@ export function useAppController() {
     )
   }
 
-  const runWhatsAppSend = async (items: ExportItem[], runDay: string) => {
+  const runWhatsAppSend = async (items: ExportItem[], _runDay: string) => {
+    if (!waTransport.ready) {
+      throw new Error(
+        'Chưa sẵn sàng gửi WhatsApp. Cài extension Chrome (extension/), mở web.whatsapp.com, F5 trang tool.',
+      )
+    }
+
+    setStatus('Đang gửi WhatsApp...')
+
     const waTeams = Object.keys(waMap)
     if (waTeams.length === 0) {
       throw new Error('Bật Gửi và điền tên nhóm WhatsApp cho ít nhất 1 đội.')
     }
-    if (!bridgeOnline) {
-      throw new Error(
-        'Chưa có WA Bridge. Chạy "Mo Web + WA Bridge.bat" trên Windows (giống tool Python).',
-      )
+    const teamsNeeded = [...new Set(items.map((i) => i.team))]
+    for (const t of teamsNeeded) {
+      if (!waMap[t]) {
+        throw new Error(`Đội "${t}": thiếu tên nhóm WhatsApp.`)
+      }
     }
-    appendLog('Đồng bộ settings sang bridge...')
-    await pushSettingsToBridge(toPythonSettings())
-    appendLog(`Upload ${items.length} ảnh vào output/${runDay}...`)
-    const n = await uploadExportItems(items, runDay)
-    appendLog(`Đã ghi ${n} ảnh. Bắt đầu gửi WhatsApp (Chrome)...`)
-    setStatus('Đang gửi WhatsApp...')
-    const log = await sendWhatsAppViaBridge(waTeams, runDay)
-    for (const line of log.split('\n')) {
-      if (line.trim()) appendLog(line.trim())
-    }
+    appendLog(`Gửi ${items.length} ảnh qua Extension (WhatsApp Web)...`)
+    await sendWhatsAppViaExtension(items, waMap, cache.teams, (line) => appendLog(line))
   }
 
   type JobMode = 'export' | 'send' | 'both'
 
   const runJob = async (mode: JobMode, asZip = false) => {
-    if (mode === 'send' && !bridgeOnline) {
-      toast.push('Cần WA Bridge trên máy Windows', 'error')
-      appendLog('Chạy: Mo Web + WA Bridge.bat (hoặc py wa_bridge_server.py)')
+    if (mode === 'send' && !waTransport.ready) {
+      toast.push('Chưa cấu hình gửi WhatsApp', 'error')
+      appendLog(
+        isLikelyVercelHost()
+          ? 'Cài extension Chrome (extension/), mở web.whatsapp.com đăng nhập, F5 trang tool.'
+          : 'Cài extension Chrome (extension/), mở web.whatsapp.com, F5 trang tool.',
+      )
       return
     }
     if (mode !== 'send' && !workbook) {
@@ -345,7 +434,7 @@ export function useAppController() {
           sendItems,
           skip,
           started,
-          mode === 'both' ? 'Xuất + gửi WhatsApp (Playwright)' : 'Gửi WhatsApp (Playwright)',
+          mode === 'both' ? 'Xuất + gửi WhatsApp (Extension)' : 'Gửi WhatsApp (Extension)',
         )
         setStatus('Hoàn tất gửi WhatsApp')
         toast.push('Hoàn tất gửi WhatsApp', 'success')
@@ -385,22 +474,20 @@ export function useAppController() {
         if (typeof val === 'string') {
           teams[name] = {
             whatsapp_group: val.trim(),
+            whatsapp_to: '',
             send: Boolean(val.trim()),
             message_text: name,
           }
         } else {
           teams[name] = {
             whatsapp_group: (val.whatsapp_group || '').trim(),
+            whatsapp_to: (val.whatsapp_to || '').trim(),
             send: val.send ?? true,
             message_text: (val.message_text || name).trim() || name,
           }
         }
       }
-      const next = { ...cache, teams: { ...cache.teams, ...teams } }
-      setCache(next)
-      saveCache(next)
-      appendLog(`Đã nhập cài đặt từ ${file.name}`)
-      toast.push('Đã nhập settings', 'success')
+      applySettingsTeams(teams, file.name)
     } catch (err) {
       appendLog(`Lỗi nhập JSON: ${err instanceof Error ? err.message : String(err)}`)
       toast.push('Lỗi nhập JSON', 'error')
@@ -425,11 +512,15 @@ export function useAppController() {
     selectedTeams,
     waMap,
     allSelected,
-    bridgeOnline,
+    waTransport,
+    onVercelHost: isLikelyVercelHost(),
     updateTeam,
     handleSave,
     onFileChange,
     onExcelDrop,
+    pickExcelViaDialog,
+    loadDevBook1,
+    loadDevSettings,
     onSyncClick,
     toggleSelectAll,
     runExport,

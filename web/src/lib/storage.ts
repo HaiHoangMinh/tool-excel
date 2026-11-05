@@ -1,5 +1,7 @@
 export type TeamConfig = {
   whatsapp_group: string
+  /** Giữ tương thích settings_cache.json / tool desktop; web không dùng. */
+  whatsapp_to: string
   message_text: string
   send: boolean
 }
@@ -53,6 +55,7 @@ export function mergeTeamsFromExcel(
     const msg = (prev?.message_text || team).trim() || team
     merged[team] = {
       whatsapp_group: (prev?.whatsapp_group || '').trim(),
+      whatsapp_to: (prev?.whatsapp_to || '').trim(),
       send: prev?.send ?? true,
       message_text: msg,
     }

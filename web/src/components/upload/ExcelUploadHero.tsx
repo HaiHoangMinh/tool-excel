@@ -47,13 +47,31 @@ export function ExcelUploadHero({ app }: { app: AppController }) {
               disabled={app.busy}
             />
           </label>
+          <Button
+            type="button"
+            onClick={() => void app.pickExcelViaDialog()}
+            disabled={app.busy}
+          >
+            Chọn file (hộp thoại)
+          </Button>
+          {import.meta.env.DEV && (
+            <Button
+              type="button"
+              data-testid="dev-load-book1"
+              onClick={() => void app.loadDevBook1()}
+              disabled={app.busy}
+            >
+              Tải Book1 local
+            </Button>
+          )}
           <Button onClick={app.onSyncClick} disabled={app.busy || !app.workbook}>
             Đồng bộ đội từ Excel
           </Button>
         </div>
         {!dragging && (
           <p className="upload-hero__hint">
-            Trình duyệt nhúng có thể chặn chọn file — dùng kéo thả hoặc Chrome/Edge.
+            Trình duyệt nhúng có thể chặn chọn file — kéo thả, Chrome/Edge, nút hộp thoại, hoặc
+            (dev) Tải Book1 local.
           </p>
         )}
       </div>

@@ -13,12 +13,12 @@ export function ToolPage({ app }: { app: AppController }) {
         <div>
           <h1>Tool Excel — Báo cáo theo đội</h1>
           <p className="tool-header__sub">
-            Upload · xuất ảnh · gửi WhatsApp (cần WA Bridge trên Windows)
+            Upload · xuất ảnh · gửi WhatsApp (Extension Chrome + WhatsApp Web)
           </p>
         </div>
         <div className="tool-header__meta">
-          <Badge tone={app.bridgeOnline ? 'success' : 'warning'}>
-            {app.bridgeOnline ? 'WA Bridge: bật' : 'WA Bridge: tắt'}
+          <Badge tone={app.waTransport.ready ? 'success' : 'warning'}>
+            {app.waTransport.ready ? 'WA Extension: bật' : 'WA: chưa sẵn sàng'}
           </Badge>
           <Badge tone={app.busy ? 'warning' : 'neutral'}>
             {app.busy ? 'Đang xử lý' : 'Sẵn sàng'}
@@ -44,16 +44,16 @@ export function ToolPage({ app }: { app: AppController }) {
         </Button>
         <Button
           onClick={() => app.runJob('send')}
-          disabled={app.busy || !app.bridgeOnline}
-          title={app.bridgeOnline ? '' : 'Chạy Mo Web + WA Bridge.bat'}
+          disabled={app.busy || !app.waTransport.ready}
+          title={app.waTransport.ready ? '' : 'Cài extension Chrome (extension/)'}
         >
           Gửi WhatsApp
         </Button>
         <Button
           variant="primary"
           onClick={() => app.runJob('both')}
-          disabled={app.busy || !app.bridgeOnline}
-          title={app.bridgeOnline ? '' : 'Chạy Mo Web + WA Bridge.bat'}
+          disabled={app.busy || !app.waTransport.ready}
+          title={app.waTransport.ready ? '' : 'Cài extension Chrome (extension/)'}
         >
           Xuất ảnh + Gửi WhatsApp
         </Button>
@@ -79,6 +79,16 @@ export function ToolPage({ app }: { app: AppController }) {
             <button type="button" className="link-quiet" onClick={() => app.importRef.current?.click()}>
               Nhập settings_cache.json
             </button>
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                className="link-quiet"
+                data-testid="dev-load-settings"
+                onClick={() => void app.loadDevSettings()}
+              >
+                Tải settings local
+              </button>
+            )}
             <input
               ref={app.importRef}
               data-testid="import-json-input"
@@ -95,7 +105,7 @@ export function ToolPage({ app }: { app: AppController }) {
               <tr>
                 <th>Gửi</th>
                 <th>Tên đội</th>
-                <th>Tên nhóm WhatsApp</th>
+                <th>Tên nhóm WhatsApp Web</th>
                 <th>Tên trong tin (XLSC/TKM)</th>
               </tr>
             </thead>
@@ -127,7 +137,7 @@ export function ToolPage({ app }: { app: AppController }) {
                           onChange={(e) =>
                             app.updateTeam(team, { whatsapp_group: e.target.value })
                           }
-                          placeholder="Tên nhóm trên WhatsApp Web"
+                          placeholder="Trùng tên nhóm trên WhatsApp Web"
                         />
                       </td>
                       <td>
@@ -152,9 +162,11 @@ export function ToolPage({ app }: { app: AppController }) {
       <section className="panel-block">
         <h3>WhatsApp</h3>
         <p className="muted tool-wa-intro">
-          {app.bridgeOnline
-            ? 'Nút Gửi WhatsApp dùng Chrome + Playwright giống tool desktop (lần đầu quét QR).'
-            : 'Chạy file Mo Web + WA Bridge.bat cùng thư mục tool để bật gửi tự động. Tạm thời có thể copy tin bên dưới.'}
+          {app.waTransport.ready
+            ? 'Extension đang bật — tab web.whatsapp.com (đã đăng nhập) sẽ tự tìm nhóm và gửi ảnh.'
+            : app.onVercelHost
+              ? 'Chrome → chrome://extensions → Load unpacked → thư mục extension/ — mở web.whatsapp.com, F5 trang tool.'
+              : 'Cài extension Chrome (extension/), mở web.whatsapp.com, F5. Có thể copy tin bên dưới để gửi tay.'}
         </p>
         {Object.keys(app.waMap).length === 0 ? (
           <p className="muted">Bật &quot;Gửi&quot; và điền tên nhóm cho ít nhất 1 đội.</p>

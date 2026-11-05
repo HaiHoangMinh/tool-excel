@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Tool Excel — Gửi WhatsApp",
+  "version": "1.0.0",
+  "description": "Gửi ảnh báo cáo lên nhóm WhatsApp Web từ trang Tool Excel (Vercel / localhost).",
+  "permissions": ["tabs"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["wa-content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.vercel.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "Tool Excel WA",
+    "default_popup": "popup.html"
+  }
+}
